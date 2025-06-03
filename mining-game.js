@@ -513,6 +513,7 @@ class Player {
     
     explode() {
         this.isDead = true;
+        this.deathCause = 'fuel'; // Muerte por falta de combustible
         
         // Crear explosión masiva de partículas rojas (sangre)
         for (let i = 0; i < 50; i++) {
@@ -1324,8 +1325,14 @@ function gameLoop() {
         
         ctx.fillStyle = '#FFFFFF';
         ctx.font = '24px Arial';
-        ctx.fillText('Te quedaste sin combustible', canvas.width/2, canvas.height/2);
-        ctx.fillText('El motopico explotó', canvas.width/2, canvas.height/2 + 30);
+        
+        if (player.deathCause === 'dynamite') {
+            ctx.fillText('¡Reventaste como una palomita! 🍿', canvas.width/2, canvas.height/2);
+            ctx.fillText('La dinamita te voló en pedazos', canvas.width/2, canvas.height/2 + 30);
+        } else {
+            ctx.fillText('Te quedaste sin combustible', canvas.width/2, canvas.height/2);
+            ctx.fillText('El motopico explotó', canvas.width/2, canvas.height/2 + 30);
+        }
         
         ctx.font = '18px Arial';
         ctx.fillText('Recarga la página para volver a jugar', canvas.width/2, canvas.height/2 + 80);
