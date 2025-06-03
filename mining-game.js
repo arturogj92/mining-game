@@ -156,6 +156,7 @@ class Player {
         this.miningCooldown = 0;
         this.facing = 1; // 1 = derecha, -1 = izquierda
         this.money = 0;
+        this.miningDirection = { x: 0, y: 1 }; // Por defecto hacia abajo
     }
     
     update(terrain, keys) {
@@ -175,6 +176,17 @@ class Player {
         }
         
         this.mining = keys.f || keys.F || keys.ArrowDown;
+        
+        // Controlar dirección del motopico con WASD
+        if (keys.w || keys.W) {
+            this.miningDirection = { x: 0, y: -1 }; // Arriba
+        } else if (keys.s || keys.S) {
+            this.miningDirection = { x: 0, y: 1 }; // Abajo
+        } else if (keys.a || keys.A) {
+            this.miningDirection = { x: -1, y: 0 }; // Izquierda
+        } else if (keys.d || keys.D) {
+            this.miningDirection = { x: 1, y: 0 }; // Derecha
+        }
         
         this.vy += 0.5;
         if (this.vy > 10) this.vy = 10;
@@ -223,24 +235,61 @@ class Player {
         if (canMoveY) this.y = nextY;
         
         if (this.mining && this.miningCooldown <= 0) {
-            const centerX = this.x;
-            const centerY = this.y + this.height/2 + 6;
+            const baseX = this.x;
+            const baseY = this.y;
             let mined = false;
             
-            // Daño en área - 5x3 voxels (más ancho)
-            for (let dx = -8; dx <= 8; dx += 4) {
-                for (let dy = -4; dy <= 4; dy += 4) {
-                    const mineX = centerX + dx;
-                    const mineY = centerY + dy;
+            // Calcular posición base del área de minado según la dirección
+            let centerX, centerY;
+            
+            if (this.miningDirection.x === 0 && this.miningDirection.y === 1) {
+                // Abajo
+                centerX = baseX;
+                centerY = baseY + this.height/2 + 8;
+            } else if (this.miningDirection.x === 0 && this.miningDirection.y === -1) {
+                // Arriba
+                centerX = baseX;
+                centerY = baseY - this.height/2 - 8;
+            } else if (this.miningDirection.x === 1 && this.miningDirection.y === 0) {
+                // Derecha
+                centerX = baseX + this.width/2 + 8;
+                centerY = baseY;
+            } else if (this.miningDirection.x === -1 && this.miningDirection.y === 0) {
+                // Izquierda
+                centerX = baseX - this.width/2 - 8;
+                centerY = baseY;
+            }
+            
+            // Área de minado - siempre 5x3 pero orientada según la dirección
+            const areaOffsets = [];
+            
+            if (this.miningDirection.y !== 0) {
+                // Minado vertical (arriba/abajo) - área horizontal (5 ancho x 3 alto)
+                for (let dx = -8; dx <= 8; dx += 4) {
+                    for (let dy = -4; dy <= 4; dy += 4) {
+                        areaOffsets.push({ dx, dy });
+                    }
+                }
+            } else {
+                // Minado horizontal (izq/der) - área vertical (3 ancho x 5 alto)
+                for (let dx = -4; dx <= 4; dx += 4) {
+                    for (let dy = -8; dy <= 8; dy += 4) {
+                        areaOffsets.push({ dx, dy });
+                    }
+                }
+            }
+            
+            for (const offset of areaOffsets) {
+                const mineX = centerX + offset.dx;
+                const mineY = centerY + offset.dy;
+                
+                const minedType = terrain.damageVoxel(mineX, mineY, 1);
+                if (minedType) {
+                    mined = true;
                     
-                    const minedType = terrain.damageVoxel(mineX, mineY, 1);
-                    if (minedType) {
-                        mined = true;
-                        
-                        // Dar dinero por oro
-                        if (minedType === 'gold') {
-                            this.money += 10;
-                        }
+                    // Dar dinero por oro
+                    if (minedType === 'gold') {
+                        this.money += 10;
                     }
                 }
             }
@@ -275,21 +324,38 @@ class Player {
         }
         
         if (this.mining) {
-            // Mango del motopico
+            // Dibujar motopico según la dirección
             ctx.strokeStyle = '#8B4513';
             ctx.lineWidth = 3;
             ctx.beginPath();
-            ctx.moveTo(0, this.height/2 - 4);
-            ctx.lineTo(0, this.height/2 + 8);
+            
+            const startX = this.miningDirection.x * 8;
+            const startY = this.miningDirection.y * 8;
+            const endX = this.miningDirection.x * 16;
+            const endY = this.miningDirection.y * 16;
+            
+            ctx.moveTo(startX, startY);
+            ctx.lineTo(endX, endY);
             ctx.stroke();
             
             // Cabeza del motopico
             ctx.fillStyle = '#696969';
             ctx.beginPath();
-            ctx.moveTo(-4, this.height/2 + 6);
-            ctx.lineTo(4, this.height/2 + 6);
-            ctx.lineTo(4, this.height/2 + 10);
-            ctx.lineTo(-4, this.height/2 + 10);
+            
+            if (this.miningDirection.y !== 0) {
+                // Vertical
+                ctx.moveTo(endX - 4, endY - 2);
+                ctx.lineTo(endX + 4, endY - 2);
+                ctx.lineTo(endX + 4, endY + 2);
+                ctx.lineTo(endX - 4, endY + 2);
+            } else {
+                // Horizontal
+                ctx.moveTo(endX - 2, endY - 4);
+                ctx.lineTo(endX + 2, endY - 4);
+                ctx.lineTo(endX + 2, endY + 4);
+                ctx.lineTo(endX - 2, endY + 4);
+            }
+            
             ctx.closePath();
             ctx.fill();
         }
