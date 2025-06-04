@@ -7,23 +7,76 @@ class VoxelTerrain {
         this.voxels = {};
         this.generatedDepth = 0;
         this.surfaceHeight = 80; // Más abajo para dejar más cielo
+        this.generatedLeft = -this.cols; // Límite izquierdo generado
+        this.generatedRight = this.cols; // Límite derecho generado
         
         this.generateInitialTerrain();
     }
     
     generateInitialTerrain() {
         const initialRows = Math.floor(this.height / this.voxelSize) + 10;
-        this.generateTerrainRows(0, initialRows);
+        // Generar terreno inicial en un área mucho más grande para evitar vacíos
+        const initialCols = this.cols * 2; // Área más grande
+        this.generateTerrainRows(0, initialRows, -initialCols, initialCols);
         this.generatedDepth = initialRows;
+        this.generatedLeft = -initialCols;
+        this.generatedRight = initialCols;
     }
     
-    generateTerrainRows(startRow, endRow) {
-        // Primero generar el terreno base
+    createLadder(centerX, startY, height) {
+        const gridX = Math.floor(centerX / this.voxelSize);
+        const startGridY = Math.floor(startY / this.voxelSize);
+        
+        // Crear escalera hacia arriba
+        for (let i = 0; i < height; i++) {
+            const y = startGridY - i;
+            if (y >= 0 && this.voxels[gridX]) {
+                // Bloque de escalera indestructible
+                this.voxels[gridX][y] = {
+                    type: 'ladder',
+                    health: 9999,
+                    indestructible: true
+                };
+                
+                // Añadir bloques laterales para hacer la escalera más ancha
+                if (gridX > 0 && this.voxels[gridX - 1]) {
+                    this.voxels[gridX - 1][y] = {
+                        type: 'ladder',
+                        health: 9999,
+                        indestructible: true
+                    };
+                }
+                if (gridX < this.cols - 1 && this.voxels[gridX + 1]) {
+                    this.voxels[gridX + 1][y] = {
+                        type: 'ladder',
+                        health: 9999,
+                        indestructible: true
+                    };
+                }
+            }
+        }
+        
+        // Crear plataforma en la base
+        for (let dx = -3; dx <= 3; dx++) {
+            const platformX = gridX + dx;
+            if (platformX >= 0 && platformX < this.cols && this.voxels[platformX]) {
+                this.voxels[platformX][startGridY + 1] = {
+                    type: 'ladder',
+                    health: 9999,
+                    indestructible: true
+                };
+            }
+        }
+    }
+    
+    generateTerrainRows(startRow, endRow, startCol = this.generatedLeft, endCol = this.generatedRight) {
+        // Primero generar el terreno base sin minerales dispersos
         for (let y = startRow; y < endRow; y++) {
-            for (let x = 0; x < this.cols; x++) {
+            for (let x = startCol; x < endCol; x++) {
                 if (!this.voxels[x]) this.voxels[x] = {};
                 
-                const noiseHeight = Math.sin(x * 0.1) * 5 + Math.sin(x * 0.05) * 10;
+                // Usar una función de ruido más suave y consistente
+                const noiseHeight = Math.sin(x * 0.02) * 3 + Math.sin(x * 0.008) * 6;
                 const columnHeight = Math.floor(this.surfaceHeight + noiseHeight);
                 
                 if (y > columnHeight) {
@@ -31,36 +84,47 @@ class VoxelTerrain {
                     let type = 'dirt';
                     let health = 2;
                     
-                    // Diferentes tipos de materiales según profundidad
-                    if (depth > 2 && depth <= 8) {
-                        // Piedra blanda cerca de la superficie
-                        if (Math.random() < 0.3) {
+                    // Solo generar tipos de roca, sin minerales dispersos
+                    if (depth <= 5) {
+                        // Cerca de la superficie - tierra y piedra blanda
+                        const rand = Math.random();
+                        if (rand < 0.3) {
                             type = 'softStone';
                             health = 2;
                         } else {
                             type = 'dirt';
                             health = 1;
                         }
-                    } else if (depth > 8 && depth <= 15) {
-                        // Mezcla de piedras
+                    } else if (depth > 5 && depth <= 15) {
+                        // Profundidad media - piedras
+                        const rand = Math.random();
+                        if (rand < 0.5) {
+                            type = 'stone';
+                            health = 3;
+                        } else if (rand < 0.8) {
+                            type = 'softStone';
+                            health = 2;
+                        } else {
+                            type = 'dirt';
+                            health = 1;
+                        }
+                    } else if (depth > 15 && depth <= 30) {
+                        // Profundidad media-alta - piedra dura
                         const rand = Math.random();
                         if (rand < 0.4) {
                             type = 'stone';
                             health = 3;
-                        } else if (rand < 0.7) {
-                            type = 'softStone';
-                            health = 2;
-                        } else {
-                            type = 'dirt';
-                            health = 1;
-                        }
-                    } else if (depth > 15) {
-                        // Piedras más duras en profundidad
-                        const rand = Math.random();
-                        if (rand < 0.6) {
-                            type = 'stone';
-                            health = 3;
                         } else if (rand < 0.8) {
+                            type = 'hardStone';
+                            health = 4;
+                        } else {
+                            type = 'veryHardStone';
+                            health = 5;
+                        }
+                    } else if (depth > 30) {
+                        // Profundidad extrema - piedra muy dura
+                        const rand = Math.random();
+                        if (rand < 0.4) {
                             type = 'hardStone';
                             health = 4;
                         } else {
@@ -79,67 +143,125 @@ class VoxelTerrain {
             }
         }
         
-        // Luego generar vetas de minerales
-        this.generateOreVeins(startRow, endRow);
+        // Generar vetas de minerales basadas en profundidad
+        this.generateOreVeins(startRow, endRow, startCol, endCol);
     }
     
-    generateOreVeins(startRow, endRow) {
-        // Generar vetas de mineral normal
-        const oreVeinsPerChunk = 2;
-        for (let i = 0; i < oreVeinsPerChunk; i++) {
-            if (Math.random() < 0.7) {
-                const veinX = Math.floor(Math.random() * this.cols);
-                const veinY = Math.floor(Math.random() * (endRow - startRow) + startRow);
-                
-                // Solo generar si está lo suficientemente profundo
-                if (veinY > this.surfaceHeight + 15 && veinY >= startRow && veinY < endRow) {
-                    this.createVein(veinX, veinY, 'ore', 3 + Math.floor(Math.random() * 3));
-                }
-            }
-        }
+    generateOreVeins(startRow, endRow, startCol, endCol) {
+        // Generar vetas basadas en profundidad con distribución más uniforme
+        // Usar un espaciado mínimo entre vetas para evitar acumulaciones
         
-        // Generar vetas de oro (MUY POCAS pero ENORMES)
-        if (Math.random() < 0.15) { // Solo 15% de probabilidad por chunk
-            const veinX = Math.floor(Math.random() * this.cols);
-            // Oro aparece en cualquier profundidad del chunk actual
-            const veinY = Math.floor(Math.random() * (endRow - startRow) + startRow);
-            
-            // Solo generar si está bajo tierra, pero puede estar cerca de la superficie
-            if (veinY > this.surfaceHeight + 2 && veinY >= startRow && veinY < endRow) {
-                // Vetas ENORMES
-                const depth = veinY - this.surfaceHeight;
-                const baseSize = 15 + Math.floor(Math.random() * 10); // 15-25 bloques base
-                const depthBonus = Math.min(10, Math.floor(depth / 10)); // Máximo +10 por profundidad
-                this.createVein(veinX, veinY, 'gold', Math.min(35, baseSize + depthBonus));
+        const chunkSize = 20; // Tamaño de chunk para distribuir vetas
+        const veinsPerChunk = {
+            coal: 1,    // 1 veta de carbón por chunk
+            silver: 1,  // 1 veta de plata por chunk  
+            gold: 1,    // 1 veta de oro por chunk
+            diamond: 0.5 // 0.5 veta de diamante por chunk (50% probabilidad)
+        };
+        
+        // Procesar por chunks para mejor distribución
+        for (let chunkY = Math.floor(startRow / chunkSize); chunkY <= Math.floor(endRow / chunkSize); chunkY++) {
+            for (let chunkX = Math.floor(startCol / chunkSize); chunkX <= Math.floor(endCol / chunkSize); chunkX++) {
+                const chunkStartY = chunkY * chunkSize;
+                const chunkEndY = (chunkY + 1) * chunkSize;
+                const chunkStartX = chunkX * chunkSize;
+                const chunkEndX = (chunkX + 1) * chunkSize;
+                
+                // Solo procesar chunks que intersectan con la región generada
+                if (chunkEndY < startRow || chunkStartY >= endRow) continue;
+                if (chunkEndX < startCol || chunkStartX >= endCol) continue;
+                
+                const depthInMeters = (chunkStartY - this.surfaceHeight) * 1;
+                
+                // Generar vetas según la profundidad del chunk
+                // Vetas de carbón: 0-50 metros
+                if (depthInMeters >= 0 && depthInMeters <= 50) {
+                    for (let i = 0; i < veinsPerChunk.coal; i++) {
+                        if (Math.random() < 0.7) { // 70% probabilidad por chunk
+                            const veinX = chunkStartX + Math.floor(Math.random() * chunkSize);
+                            const veinY = chunkStartY + Math.floor(Math.random() * chunkSize);
+                            if (veinY >= startRow && veinY < endRow && veinX >= startCol && veinX < endCol) {
+                                this.createVein(veinX, veinY, 'coal', 4 + Math.floor(Math.random() * 3));
+                            }
+                        }
+                    }
+                }
+                
+                // Vetas de plata: 50-100 metros
+                if (depthInMeters >= 50 && depthInMeters <= 100) {
+                    for (let i = 0; i < veinsPerChunk.silver; i++) {
+                        if (Math.random() < 0.6) { // 60% probabilidad por chunk
+                            const veinX = chunkStartX + Math.floor(Math.random() * chunkSize);
+                            const veinY = chunkStartY + Math.floor(Math.random() * chunkSize);
+                            if (veinY >= startRow && veinY < endRow && veinX >= startCol && veinX < endCol) {
+                                this.createVein(veinX, veinY, 'silver', 3 + Math.floor(Math.random() * 3));
+                            }
+                        }
+                    }
+                }
+                
+                // Vetas de oro: 100+ metros
+                if (depthInMeters >= 100) {
+                    for (let i = 0; i < veinsPerChunk.gold; i++) {
+                        if (Math.random() < 0.5) { // 50% probabilidad por chunk
+                            const veinX = chunkStartX + Math.floor(Math.random() * chunkSize);
+                            const veinY = chunkStartY + Math.floor(Math.random() * chunkSize);
+                            if (veinY >= startRow && veinY < endRow && veinX >= startCol && veinX < endCol) {
+                                this.createVein(veinX, veinY, 'gold', 2 + Math.floor(Math.random() * 3));
+                            }
+                        }
+                    }
+                }
+                
+                // Vetas de diamante: 150+ metros (muy raras)
+                if (depthInMeters >= 150) {
+                    if (Math.random() < veinsPerChunk.diamond) { // 50% probabilidad por chunk
+                        const veinX = chunkStartX + Math.floor(Math.random() * chunkSize);
+                        const veinY = chunkStartY + Math.floor(Math.random() * chunkSize);
+                        if (veinY >= startRow && veinY < endRow && veinX >= startCol && veinX < endCol) {
+                            this.createVein(veinX, veinY, 'diamond', 1 + Math.floor(Math.random() * 2));
+                        }
+                    }
+                }
             }
         }
     }
     
     createVein(centerX, centerY, oreType, size) {
-        const health = oreType === 'gold' ? 5 : 4;
+        const healthMap = {
+            coal: 2,
+            silver: 4,
+            gold: 5,
+            diamond: 6
+        };
+        const health = healthMap[oreType] || 4;
         
-        // Crear veta con forma irregular
-        for (let i = 0; i < size * 4; i++) {
+        // Crear veta con tamaño moderado
+        for (let i = 0; i < size * 4; i++) { // Moderada cantidad de bloques por veta
             const angle = Math.random() * Math.PI * 2;
-            const distance = Math.random() * size;
+            const distance = Math.random() * size; // Tamaño normal
             
             const x = Math.floor(centerX + Math.cos(angle) * distance);
             const y = Math.floor(centerY + Math.sin(angle) * distance);
             
             // Verificar límites - pueden reemplazar cualquier material sólido
-            if (x >= 0 && x < this.cols && this.voxels[x] && this.voxels[x][y] && 
-                this.voxels[x][y]) {
+            if (this.voxels[x] && this.voxels[x][y]) {
                 this.voxels[x][y] = { type: oreType, health: health };
                 
                 // Añadir algunos bloques adyacentes para hacer la veta más densa
-                if (Math.random() < 0.4) {
-                    const adjacentX = x + Math.floor(Math.random() * 3 - 1);
-                    const adjacentY = y + Math.floor(Math.random() * 3 - 1);
-                    
-                    if (adjacentX >= 0 && adjacentX < this.cols && 
-                        this.voxels[adjacentX] && this.voxels[adjacentX][adjacentY] &&
-                        this.voxels[adjacentX][adjacentY]) {
-                        this.voxels[adjacentX][adjacentY] = { type: oreType, health: health };
+                if (Math.random() < 0.4) { // Probabilidad moderada de bloques adyacentes
+                    for (let dx = -1; dx <= 1; dx++) {
+                        for (let dy = -1; dy <= 1; dy++) {
+                            if (dx === 0 && dy === 0) continue;
+                            
+                            const adjacentX = x + dx;
+                            const adjacentY = y + dy;
+                            
+                            if (this.voxels[adjacentX] && this.voxels[adjacentX][adjacentY] &&
+                                this.voxels[adjacentX][adjacentY] && Math.random() < 0.3) {
+                                this.voxels[adjacentX][adjacentY] = { type: oreType, health: health };
+                            }
+                        }
                     }
                 }
             }
@@ -156,12 +278,44 @@ class VoxelTerrain {
         }
     }
     
+    checkAndGenerateWidth(cameraX) {
+        const leftX = cameraX;
+        const rightX = cameraX + this.width;
+        const leftCol = Math.floor(leftX / this.voxelSize) - 50; // Expandir más temprano
+        const rightCol = Math.floor(rightX / this.voxelSize) + 50; // Expandir más temprano
+        
+        // Expandir hacia la izquierda
+        if (leftCol < this.generatedLeft) {
+            this.generateTerrainRows(0, this.generatedDepth, leftCol, this.generatedLeft);
+            this.generatedLeft = leftCol;
+        }
+        
+        // Expandir hacia la derecha
+        if (rightCol > this.generatedRight) {
+            this.generateTerrainRows(0, this.generatedDepth, this.generatedRight, rightCol);
+            this.generatedRight = rightCol;
+        }
+    }
+    
     getVoxel(x, y) {
         const gridX = Math.floor(x / this.voxelSize);
         const gridY = Math.floor(y / this.voxelSize);
         
-        if (gridX < 0 || gridX >= this.cols || gridY < 0) {
-            return null;
+        if (gridY < 0) {
+            return null; // Cielo
+        }
+        
+        // Si no existe el voxel, generar terreno bajo demanda
+        if (!this.voxels[gridX] || !this.voxels[gridX][gridY]) {
+            // Generar terreno en esa área si está dentro de límites razonables
+            if (gridX < this.generatedLeft || gridX > this.generatedRight) {
+                // Expandir área si es necesario
+                const newLeft = Math.min(this.generatedLeft, gridX - 50);
+                const newRight = Math.max(this.generatedRight, gridX + 50);
+                this.generateTerrainRows(0, Math.max(this.generatedDepth, gridY + 50), newLeft, newRight);
+                this.generatedLeft = newLeft;
+                this.generatedRight = newRight;
+            }
         }
         
         if (!this.voxels[gridX]) return null;
@@ -172,8 +326,8 @@ class VoxelTerrain {
         const gridX = Math.floor(x / this.voxelSize);
         const gridY = Math.floor(y / this.voxelSize);
         
-        // Prevenir excavar en los bordes del mapa (dejar 2 columnas de margen)
-        if (gridX <= 1 || gridX >= this.cols - 2 || gridY < 0) {
+        // Prevenir excavar demasiado cerca del cielo
+        if (gridY < 0) {
             return null;
         }
         
@@ -181,6 +335,11 @@ class VoxelTerrain {
         
         const voxel = this.voxels[gridX][gridY];
         if (voxel) {
+            // No permitir dañar bloques indestructibles
+            if (voxel.indestructible) {
+                return null;
+            }
+            
             voxel.health -= damage;
             if (voxel.health <= 0) {
                 const type = voxel.type;
@@ -192,11 +351,13 @@ class VoxelTerrain {
         return null;
     }
     
-    draw(ctx, cameraY) {
+    draw(ctx, cameraX, cameraY) {
         const startY = Math.floor(cameraY / this.voxelSize);
         const endY = Math.ceil((cameraY + this.height) / this.voxelSize);
+        const startX = Math.floor(cameraX / this.voxelSize) - 5;
+        const endX = Math.ceil((cameraX + this.width) / this.voxelSize) + 5;
         
-        for (let x = 0; x < this.cols; x++) {
+        for (let x = startX; x <= endX; x++) {
             if (!this.voxels[x]) continue;
             
             for (let y = startY; y <= endY; y++) {
@@ -209,7 +370,11 @@ class VoxelTerrain {
                         hardStone: '#4A4A4A',
                         veryHardStone: '#2F2F2F',
                         ore: '#708090',
-                        gold: '#FFD700'
+                        coal: '#1a1a1a',
+                        silver: '#C0C0C0',
+                        gold: '#FFD700',
+                        diamond: '#B9F2FF',
+                        ladder: '#654321'
                     };
                     
                     ctx.fillStyle = colors[voxel.type];
@@ -237,7 +402,10 @@ class VoxelTerrain {
                         hardStone: 4,
                         veryHardStone: 5,
                         ore: 4,
-                        gold: 5
+                        coal: 2,
+                        silver: 4,
+                        gold: 5,
+                        diamond: 6
                     };
                     const maxHealth = maxHealthMap[voxel.type] || 2;
                     if (voxel.health < maxHealth) {
@@ -252,6 +420,107 @@ class VoxelTerrain {
                 }
             }
         }
+    }
+    
+    // Sistema de físicas para voxels flotantes
+    applyVoxelPhysics(cameraX, cameraY) {
+        // Solo procesar área visible para optimización
+        const startY = Math.floor(cameraY / this.voxelSize);
+        const endY = Math.ceil((cameraY + this.height) / this.voxelSize);
+        const startX = Math.floor(cameraX / this.voxelSize) - 10;
+        const endX = Math.ceil((cameraX + this.width) / this.voxelSize) + 10;
+        
+        const fallingVoxels = [];
+        
+        // Buscar voxels flotantes (de abajo hacia arriba para evitar cascadas)
+        for (let y = endY; y >= startY; y--) {
+            for (let x = startX; x <= endX; x++) {
+                if (!this.voxels[x] || !this.voxels[x][y]) continue;
+                
+                const voxel = this.voxels[x][y];
+                if (!voxel || voxel.indestructible) continue; // No aplicar física a bloques indestructibles
+                
+                // Verificar si tiene soporte debajo
+                const hasSupport = this.hasSupport(x, y);
+                
+                if (!hasSupport) {
+                    // Encontrar donde debe caer
+                    const fallY = this.findFallPosition(x, y);
+                    if (fallY > y) {
+                        fallingVoxels.push({
+                            x: x,
+                            originalY: y,
+                            targetY: fallY,
+                            voxel: { ...voxel }
+                        });
+                    }
+                }
+            }
+        }
+        
+        // Aplicar las caídas
+        fallingVoxels.forEach(falling => {
+            // Remover voxel de posición original
+            this.voxels[falling.x][falling.originalY] = null;
+            
+            // Colocar en nueva posición
+            if (!this.voxels[falling.x]) this.voxels[falling.x] = {};
+            this.voxels[falling.x][falling.targetY] = falling.voxel;
+            
+            // Crear partículas de caída
+            const worldX = falling.x * this.voxelSize + this.voxelSize/2;
+            const worldY = falling.targetY * this.voxelSize + this.voxelSize/2;
+            const colors = {
+                dirt: '#8B4513',
+                softStone: '#A0A0A0',
+                stone: '#696969',
+                hardStone: '#4A4A4A',
+                veryHardStone: '#2F2F2F',
+                coal: '#1a1a1a',
+                silver: '#C0C0C0',
+                gold: '#FFD700',
+                diamond: '#B9F2FF'
+            };
+            
+            particleSystem.addParticles(worldX, worldY, colors[falling.voxel.type] || '#888', 3);
+        });
+        
+        return fallingVoxels.length; // Retornar número de bloques que cayeron
+    }
+    
+    // Verificar si un voxel tiene soporte (está conectado a otros voxels)
+    hasSupport(x, y) {
+        // Verificar todas las direcciones adyacentes (incluye diagonales)
+        const adjacentPositions = [
+            { dx: -1, dy: -1 }, { dx: 0, dy: -1 }, { dx: 1, dy: -1 }, // Arriba
+            { dx: -1, dy: 0 },                     { dx: 1, dy: 0 },  // Lados
+            { dx: -1, dy: 1 },  { dx: 0, dy: 1 },  { dx: 1, dy: 1 }   // Abajo
+        ];
+        
+        // Si tiene al menos un voxel conectado en cualquier dirección, no debe caer
+        for (const pos of adjacentPositions) {
+            const adjX = x + pos.dx;
+            const adjY = y + pos.dy;
+            
+            if (this.voxels[adjX] && this.voxels[adjX][adjY]) {
+                return true; // Tiene al menos una conexión, no debe caer
+            }
+        }
+        
+        return false; // Completamente aislado, debe caer
+    }
+    
+    // Encontrar la posición donde debe caer un voxel
+    findFallPosition(x, y) {
+        // Buscar la primera posición sólida debajo
+        for (let checkY = y + 1; checkY < this.generatedDepth; checkY++) {
+            if (this.voxels[x] && this.voxels[x][checkY]) {
+                return checkY - 1; // Caer encima del bloque sólido
+            }
+        }
+        
+        // Si no encuentra nada sólido, caer al fondo generado
+        return this.generatedDepth - 1;
     }
 }
 
@@ -290,6 +559,32 @@ class Player {
         // Dinamita
         this.dynamiteCount = 5; // Número inicial de dinamitas
         this.dynamiteCooldown = 0;
+        this.explosionRadiusLevel = 1; // Nivel de radio de explosión
+        
+        // Jetpack
+        this.jetpackActive = false;
+        this.jetpackPower = 0.4; // Fuerza del jetpack (más lento)
+        this.jetpackFuelConsumption = 0.4; // Combustible por frame (balanceado)
+        this.jetpackEfficiencyLevel = 1; // Nivel de eficiencia
+        this.jetpackPowerLevel = 1; // Nivel de potencia
+        
+        // Mochila de recursos
+        this.inventory = {
+            coal: 0,
+            silver: 0,
+            gold: 0,
+            diamond: 0
+        };
+        this.maxInventoryTotal = 20; // Capacidad total de la mochila
+        this.backpackLevel = 1; // Nivel de la mochila
+    }
+    
+    getTotalInventoryCount() {
+        return this.inventory.coal + this.inventory.silver + this.inventory.gold + this.inventory.diamond;
+    }
+    
+    canAddToInventory(amount = 1) {
+        return this.getTotalInventoryCount() + amount <= this.maxInventoryTotal;
     }
     
     update(terrain, keys) {
@@ -299,8 +594,8 @@ class Player {
             return;
         }
         
-        // Verificar si se quedó sin combustible mientras excavaba
-        if (this.fuel <= 0 && this.mining) {
+        // Verificar si se quedó sin combustible mientras excavaba o usando jetpack
+        if (this.fuel <= 0 && (this.mining || this.jetpackActive)) {
             this.explode();
             return;
         }
@@ -345,18 +640,41 @@ class Player {
             }
         }
         
+        // Salto normal solo si está en el suelo
         if (keys[' '] && this.onGround) {
             this.vy = -this.jumpPower;
+        }
+        
+        // Jetpack: volar con aceleración progresiva manteniendo espacio en el aire
+        this.jetpackActive = false;
+        if (keys[' '] && !this.onGround && this.fuel > 0) {
+            this.jetpackActive = true;
+            
+            // Calcular potencia y eficiencia basada en niveles
+            const actualPower = this.jetpackPower + (this.jetpackPowerLevel - 1) * 0.15;
+            const actualConsumption = this.jetpackFuelConsumption - (this.jetpackEfficiencyLevel - 1) * 0.05;
+            
+            this.vy -= actualPower; // Impulso basado en nivel de potencia
+            this.fuel = Math.max(0, this.fuel - Math.max(0.1, actualConsumption));
+            
+            // Limitar velocidad máxima del jetpack
+            const maxSpeed = -5 - (this.jetpackPowerLevel - 1) * 0.5;
+            if (this.vy < maxSpeed) {
+                this.vy = maxSpeed;
+            }
         }
         
         this.mining = (keys.f || keys.F) && this.fuel > 0;
         
         // Lanzar dinamita con G
         if ((keys.g || keys.G) && this.dynamiteCount > 0 && this.dynamiteCooldown <= 0) {
-            const dynamite = new Dynamite(this.x, this.y - 10);
+            const dynamite = new Dynamite(this.x, this.y - 10, this.explosionRadiusLevel);
+            // Dar velocidad inicial en la dirección que mira el jugador
+            dynamite.vx = this.facing * 3; // Velocidad horizontal
+            dynamite.vy = -2; // Pequeño impulso hacia arriba
             dynamites.push(dynamite);
             this.dynamiteCount--;
-            this.dynamiteCooldown = 60; // 1 segundo de cooldown
+            this.dynamiteCooldown = 20; // 0.33 segundos de cooldown
         }
         
         if (this.dynamiteCooldown > 0) {
@@ -379,19 +697,30 @@ class Player {
         this.onGround = false;
         
         // Checar colisión vertical con más precisión
+        let groundCollisions = 0;
+        let totalChecks = 0;
+        
+        // Optimizar puntos de verificación para voxels de 6px
         for (let px = this.x - this.width/2 + 2; px <= this.x + this.width/2 - 2; px += 3) {
-            // Colisión inferior
-            if (terrain.getVoxel(px, bottomEdge + 1)) {
-                canMoveY = false;
-                this.onGround = true;
+            totalChecks++;
+            
+            // Colisión inferior - verificar con tolerancia ajustada para voxels más grandes
+            const groundVoxel = terrain.getVoxel(px, bottomEdge + 3);
+            if (groundVoxel) {
+                groundCollisions++;
                 if (this.vy > 0) {
+                    canMoveY = false;
+                    this.onGround = true;
                     this.vy = 0;
-                    this.y = Math.floor((bottomEdge + 1) / terrain.voxelSize) * terrain.voxelSize - this.height / 2 - 1;
+                    // Ajustar posición con mejor precisión para voxels de 6px
+                    const blockGridY = Math.floor((bottomEdge + 3) / terrain.voxelSize);
+                    const blockY = blockGridY * terrain.voxelSize;
+                    this.y = blockY - this.height / 2 - 3;
                 }
             }
             
-            // Colisión superior
-            if (terrain.getVoxel(px, topEdge - 1)) {
+            // Colisión superior con tolerancia ajustada
+            if (terrain.getVoxel(px, topEdge - 3)) {
                 canMoveY = false;
                 if (this.vy < 0) {
                     this.vy = 0;
@@ -399,24 +728,67 @@ class Player {
             }
         }
         
-        // Checar colisión horizontal con más precisión - solo en el centro del personaje
-        if (this.vx !== 0) {
-            for (let py = this.y - this.height/2 + 4; py <= this.y + this.height/2 - 4; py += 4) {
-                // Colisión derecha - checar exactamente en el borde
-                if (this.vx > 0 && terrain.getVoxel(this.x + this.width/2 + 2, py)) {
-                    canMoveX = false;
+        // Con un solo punto de contacto es suficiente para saltar
+        if (groundCollisions === 0) {
+            this.onGround = false;
+        }
+        
+        // Prevenir enterramiento mejorado - solo si está completamente enterrado
+        const centerVoxel = terrain.getVoxel(this.x, this.y);
+        const headVoxel = terrain.getVoxel(this.x, this.y - this.height/2);
+        const feetVoxel = terrain.getVoxel(this.x, this.y + this.height/2);
+        
+        // Solo activar anti-enterramiento si está completamente rodeado
+        if (centerVoxel && headVoxel && feetVoxel) {
+            // Buscar el espacio libre más cercano hacia arriba, pero con límite
+            let foundSpace = false;
+            const maxPushDistance = terrain.voxelSize * 2; // Máximo 2 bloques
+            
+            for (let checkY = this.y; checkY >= this.y - maxPushDistance; checkY -= terrain.voxelSize) {
+                if (!terrain.getVoxel(this.x, checkY) && !terrain.getVoxel(this.x, checkY - this.height/2)) {
+                    this.y = checkY;
+                    this.vy = 0;
+                    foundSpace = true;
+                    break;
+                }
+            }
+            
+            // Si no encuentra espacio cercano, empujar solo un poco
+            if (!foundSpace) {
+                this.y -= terrain.voxelSize;
+            }
+        }
+        
+        // Sistema de auto-escalado para obstáculos pequeños
+        if (this.vx !== 0 && canMoveX) {
+            const checkX = this.vx > 0 ? this.x + this.width/2 + 2 : this.x - this.width/2 - 2;
+            let obstacleHeight = 0;
+            
+            // Verificar si hay obstáculo en el nivel de los pies
+            const feetY = this.y + this.height/2 - 4;
+            if (terrain.getVoxel(checkX, feetY)) {
+                // Medir la altura del obstáculo desde abajo hacia arriba
+                for (let checkY = feetY; checkY >= this.y - this.height/2; checkY -= terrain.voxelSize) {
+                    if (terrain.getVoxel(checkX, checkY)) {
+                        obstacleHeight += terrain.voxelSize;
+                    } else {
+                        break;
+                    }
                 }
                 
-                // Colisión izquierda - checar exactamente en el borde
-                if (this.vx < 0 && terrain.getVoxel(this.x - this.width/2 - 2, py)) {
+                // Ajustar umbral de auto-escalado para voxels de 6px (máximo 1.5 bloques)
+                if (obstacleHeight <= terrain.voxelSize * 1.5 && this.onGround) {
+                    // Auto-escalar: mover hacia arriba con margen apropiado
+                    this.y -= obstacleHeight + 3;
+                } else {
+                    // Obstáculo demasiado alto, bloquear movimiento
                     canMoveX = false;
                 }
             }
         }
         
         if (canMoveX) {
-            // Limitar movimiento dentro de los bordes del mapa
-            this.x = Math.max(this.width/2 + 8, Math.min(nextX, terrain.width - this.width/2 - 8));
+            this.x = nextX;
         }
         if (canMoveY) this.y = nextY;
         
@@ -478,9 +850,9 @@ class Player {
                 if (minedType) {
                     mined = true;
                     
-                    // Dar dinero por oro
-                    if (minedType === 'gold') {
-                        this.money += 10;
+                    // Recolectar recursos en la mochila (si hay espacio)
+                    if (this.canAddToInventory() && (minedType === 'coal' || minedType === 'silver' || minedType === 'gold' || minedType === 'diamond')) {
+                        this.inventory[minedType]++;
                     }
                     
                     // Crear partículas al romper
@@ -491,7 +863,11 @@ class Player {
                         hardStone: '#4A4A4A',
                         veryHardStone: '#2F2F2F',
                         ore: '#708090',
-                        gold: '#FFD700'
+                        coal: '#1a1a1a',
+                        silver: '#C0C0C0',
+                        gold: '#FFD700',
+                        diamond: '#B9F2FF',
+                        ladder: '#654321'
                     };
                     particleSystem.addParticles(mineX, mineY, colors[minedType] || '#888', 8);
                 }
@@ -641,12 +1017,29 @@ class Player {
             ctx.fill();
         }
         
+        // Dibujar efectos del jetpack
+        if (this.jetpackActive) {
+            // Llamas del jetpack más grandes y potentes
+            ctx.fillStyle = '#FF4500';
+            ctx.fillRect(-4, this.height/2 - 3, 8, 12);
+            
+            ctx.fillStyle = '#FFD700';
+            ctx.fillRect(-3, this.height/2, 6, 9);
+            
+            ctx.fillStyle = '#FF8800';
+            ctx.fillRect(-2, this.height/2 + 3, 4, 6);
+            
+            // Núcleo azul para mostrar combustión completa
+            ctx.fillStyle = '#00BFFF';
+            ctx.fillRect(-1, this.height/2 + 1, 2, 3);
+        }
+        
         ctx.restore();
     }
 }
 
 class Dynamite {
-    constructor(x, y) {
+    constructor(x, y, explosionRadiusLevel = 1) {
         this.x = x;
         this.y = y;
         this.width = 20; // MUY GRANDE
@@ -655,42 +1048,88 @@ class Dynamite {
         this.maxFuseTime = 180;
         this.exploded = false;
         this.blinkTimer = 0;
-        this.vy = 0;
+        this.vx = 0; // Velocidad horizontal
+        this.vy = 0; // Velocidad vertical
         this.onGround = false;
-        this.explosionRadius = 80; // Radio de explosión ENORME
+        this.explosionRadius = 80 + (explosionRadiusLevel - 1) * 20; // Radio de explosión aumenta con nivel
         this.hasExploded = false; // Flag para asegurar que solo explote una vez
     }
     
-    update(terrain) {
+    update(terrain, allDynamites = []) {
         if (this.exploded) return;
         
         this.fuseTime--;
         this.blinkTimer++;
         
-        // Física de caída
+        // Física de caída y movimiento horizontal
+        // Siempre verificar si hay suelo debajo (por si se destruyó)
+        const hasGroundBelow = terrain.getVoxel(this.x, this.y + this.height/2 + 2);
+        
+        if (!hasGroundBelow) {
+            this.onGround = false;
+        }
+        
         if (!this.onGround) {
             this.vy += 0.5; // Gravedad
             this.y += this.vy;
+            this.x += this.vx; // Movimiento horizontal
+            
+            // Fricción del aire
+            this.vx *= 0.98;
             
             // Verificar colisión con el suelo
             if (terrain.getVoxel(this.x, this.y + this.height/2)) {
                 this.onGround = true;
                 this.vy = 0;
+                this.vx *= 0.3; // Fricción al tocar el suelo
                 // Ajustar posición para que esté encima del bloque
                 const gridY = Math.floor((this.y + this.height/2) / terrain.voxelSize);
                 this.y = gridY * terrain.voxelSize - this.height/2;
+            }
+            
+            // Verificar colisión con paredes
+            if (terrain.getVoxel(this.x + this.width/2 * Math.sign(this.vx), this.y)) {
+                this.vx = 0;
             }
         }
         
         // Explotar cuando se acabe el tiempo
         if (this.fuseTime <= 0 && !this.hasExploded) {
-            this.explode(terrain);
+            this.explode(terrain, allDynamites);
             this.hasExploded = true;
         }
     }
     
-    explode(terrain) {
+    explode(terrain, allDynamites = []) {
         this.exploded = true;
+        
+        // Aplicar física de explosión a otras dinamitas cercanas
+        allDynamites.forEach(otherDynamite => {
+            if (otherDynamite === this || otherDynamite.exploded) return;
+            
+            const distance = Math.sqrt(
+                Math.pow(otherDynamite.x - this.x, 2) + 
+                Math.pow(otherDynamite.y - this.y, 2)
+            );
+            
+            // Si está dentro del radio de explosión, aplicar impulso
+            if (distance <= this.explosionRadius && distance > 0) {
+                const force = Math.max(0, (this.explosionRadius - distance) / this.explosionRadius);
+                const angle = Math.atan2(otherDynamite.y - this.y, otherDynamite.x - this.x);
+                
+                // Aplicar impulso basado en la fuerza de la explosión
+                const impulseStrength = 25 * force; // Fuerza del impulso aumentada
+                otherDynamite.vx += Math.cos(angle) * impulseStrength;
+                otherDynamite.vy += Math.sin(angle) * impulseStrength;
+                
+                // Hacer que se despegue del suelo para que pueda volar
+                otherDynamite.onGround = false;
+                
+                // Reducir tiempo de mecha por la sacudida (reacción en cadena)
+                const shockReduction = Math.floor(30 * force); // Hasta 30 frames menos
+                otherDynamite.fuseTime = Math.max(10, otherDynamite.fuseTime - shockReduction);
+            }
+        });
         
         // Crear explosión masiva de partículas
         for (let i = 0; i < 80; i++) {
@@ -716,8 +1155,14 @@ class Dynamite {
             particleSystem.particles.push(particle);
         }
         
-        // Destruir bloques en área circular MÁS GRANDE y recolectar oro
-        let goldCollected = 0;
+        // Destruir bloques en área circular MÁS GRANDE y recolectar recursos
+        this.resourcesCollected = {
+            coal: 0,
+            silver: 0,
+            gold: 0,
+            diamond: 0
+        };
+        
         for (let dx = -this.explosionRadius; dx <= this.explosionRadius; dx += 2) {
             for (let dy = -this.explosionRadius; dy <= this.explosionRadius; dy += 2) {
                 const distance = Math.sqrt(dx * dx + dy * dy);
@@ -725,19 +1170,19 @@ class Dynamite {
                     const blockX = this.x + dx;
                     const blockY = this.y + dy;
                     
-                    // Verificar si es oro antes de destruirlo
+                    // Verificar si es un recurso antes de destruirlo
                     const voxel = terrain.getVoxel(blockX, blockY);
-                    if (voxel && voxel.type === 'gold') {
-                        goldCollected += 10; // Oro recogido por la explosión
+                    if (voxel) {
+                        if (voxel.type === 'coal') this.resourcesCollected.coal++;
+                        else if (voxel.type === 'silver') this.resourcesCollected.silver++;
+                        else if (voxel.type === 'gold') this.resourcesCollected.gold++;
+                        else if (voxel.type === 'diamond') this.resourcesCollected.diamond++;
                     }
                     
                     terrain.damageVoxel(blockX, blockY, 999); // Daño masivo que destruye cualquier bloque
                 }
             }
         }
-        
-        // Guardar el oro para dárselo al jugador después
-        this.goldToGive = goldCollected;
     }
     
     checkPlayerCollision(player) {
@@ -902,12 +1347,166 @@ class ParticleSystem {
     }
 }
 
+class Merchant {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.width = 20;
+        this.height = 30;
+        this.showShop = false;
+        
+        // Precios de compra de recursos
+        this.prices = {
+            coal: 2,
+            silver: 8,
+            gold: 25,
+            diamond: 100
+        };
+    }
+    
+    isNearPlayer(player) {
+        const distance = Math.sqrt(
+            Math.pow(this.x - player.x, 2) + 
+            Math.pow(this.y - player.y, 2)
+        );
+        return distance < 60;
+    }
+    
+    sellAllResources(player) {
+        let totalMoney = 0;
+        
+        // Vender todos los recursos
+        Object.keys(player.inventory).forEach(resource => {
+            const amount = player.inventory[resource];
+            if (amount > 0 && this.prices[resource]) {
+                const money = amount * this.prices[resource];
+                totalMoney += money;
+                player.inventory[resource] = 0;
+            }
+        });
+        
+        player.money += totalMoney;
+        return totalMoney;
+    }
+    
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        
+        // Cuerpo del mercader (humano)
+        ctx.fillStyle = '#8B4513'; // Ropa marrón
+        ctx.fillRect(-this.width/2, -this.height/2, this.width, this.height);
+        
+        // Cabeza
+        ctx.fillStyle = '#FFDBAC'; // Piel
+        ctx.beginPath();
+        ctx.ellipse(0, -this.height/2 - 8, 10, 10, 0, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Ojos
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.arc(-3, -this.height/2 - 8, 1, 0, Math.PI * 2);
+        ctx.arc(3, -this.height/2 - 8, 1, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Sombrero de mercader
+        ctx.fillStyle = '#4B0082';
+        ctx.beginPath();
+        ctx.ellipse(0, -this.height/2 - 15, 12, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillRect(-8, -this.height/2 - 20, 16, 8);
+        
+        // Barba
+        ctx.fillStyle = '#696969';
+        ctx.beginPath();
+        ctx.ellipse(0, -this.height/2 - 2, 6, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Letrero
+        ctx.fillStyle = 'rgba(139, 69, 19, 0.9)';
+        ctx.fillRect(-25, this.height/2 + 2, 50, 12);
+        ctx.fillStyle = '#FFD700';
+        ctx.font = 'bold 8px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('MERCADER', 0, this.height/2 + 10);
+        
+        ctx.restore();
+    }
+    
+    drawShopUI(ctx, player) {
+        if (!this.showShop) return;
+        
+        // Fondo de la tienda
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.fillRect(50, 50, 700, 500);
+        
+        // Título
+        ctx.fillStyle = '#FFD700';
+        ctx.font = 'bold 24px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('🏪 MERCADER DE RECURSOS 🏪', 400, 90);
+        
+        // Dinero del jugador
+        ctx.fillStyle = '#00FF00';
+        ctx.font = 'bold 18px Arial';
+        ctx.fillText(`💰 Dinero: ${player.money}`, 400, 120);
+        
+        // Tu inventario
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = 'bold 20px Arial';
+        ctx.fillText('TU INVENTARIO:', 200, 160);
+        
+        let yPos = 190;
+        const totalValue = Object.keys(player.inventory).reduce((total, resource) => {
+            const amount = player.inventory[resource];
+            const value = amount * (this.prices[resource] || 0);
+            return total + value;
+        }, 0);
+        
+        ctx.font = '16px Arial';
+        ctx.fillStyle = '#1C1C1C';
+        ctx.textAlign = 'left';
+        ctx.fillText(`⚫ Carbón: ${player.inventory.coal} x ${this.prices.coal} = ${player.inventory.coal * this.prices.coal}💰`, 100, yPos);
+        yPos += 30;
+        ctx.fillStyle = '#C0C0C0';
+        ctx.fillText(`⚪ Plata: ${player.inventory.silver} x ${this.prices.silver} = ${player.inventory.silver * this.prices.silver}💰`, 100, yPos);
+        yPos += 30;
+        ctx.fillStyle = '#FFD700';
+        ctx.fillText(`🟡 Oro: ${player.inventory.gold} x ${this.prices.gold} = ${player.inventory.gold * this.prices.gold}💰`, 100, yPos);
+        yPos += 30;
+        ctx.fillStyle = '#B9F2FF';
+        ctx.fillText(`💎 Diamante: ${player.inventory.diamond} x ${this.prices.diamond} = ${player.inventory.diamond * this.prices.diamond}💰`, 100, yPos);
+        yPos += 50;
+        
+        // Total
+        ctx.fillStyle = '#00FF00';
+        ctx.font = 'bold 20px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(`VALOR TOTAL: ${totalValue}💰`, 400, yPos);
+        
+        // Botón vender todo
+        if (totalValue > 0) {
+            ctx.fillStyle = '#2a5a2a';
+            ctx.fillRect(300, yPos + 20, 200, 50);
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = 'bold 18px Arial';
+            ctx.fillText('VENDER TODO [V]', 400, yPos + 50);
+        }
+        
+        // Instrucciones
+        ctx.fillStyle = '#CCCCCC';
+        ctx.font = '14px Arial';
+        ctx.fillText('Presiona V para vender todo | ESC para cerrar', 400, 520);
+    }
+}
+
 class GoblinShop {
     constructor(x, y) {
         this.x = x;
         this.y = y;
-        this.width = 50;
-        this.height = 40;
+        this.width = 25;
+        this.height = 20;
         this.showShop = false;
         this.warningMessage = '';
         this.warningTimer = 0;
@@ -916,7 +1515,10 @@ class GoblinShop {
             refuel: { name: "Recarga Combustible", cost: 20, level: 0, maxLevel: 999 },
             fuelTank: { name: "Tanque Más Grande", cost: 50, level: 1, maxLevel: 5 },
             jumpBoots: { name: "Botas de Salto", cost: 60, level: 1, maxLevel: 5 },
-            miningSpeed: { name: "Motopico Rápido", cost: 80, level: 1, maxLevel: 5 }
+            miningSpeed: { name: "Motopico Rápido", cost: 80, level: 1, maxLevel: 5 },
+            backpack: { name: "Mochila Grande", cost: 40, level: 1, maxLevel: 10 },
+            dynamite: { name: "Comprar Dinamita x5", cost: 30, level: 0, maxLevel: 999 },
+            explosionRadius: { name: "Radio Explosión", cost: 100, level: 1, maxLevel: 5 }
         };
     }
     
@@ -962,6 +1564,22 @@ class GoblinShop {
                     player.miningSpeedLevel++;
                     upgrade.cost = Math.floor(upgrade.cost * 1.6);
                     break;
+                case 'backpack':
+                    // Aumentar capacidad de la mochila
+                    player.maxInventoryTotal += 20;
+                    player.backpackLevel++;
+                    upgrade.cost = Math.floor(upgrade.cost * 1.3);
+                    break;
+                case 'dynamite':
+                    // Comprar 5 dinamitas
+                    player.dynamiteCount += 5;
+                    break;
+                case 'explosionRadius':
+                    // Aumentar radio de explosión (necesitamos añadir esta propiedad al jugador)
+                    if (!player.explosionRadiusLevel) player.explosionRadiusLevel = 1;
+                    player.explosionRadiusLevel++;
+                    upgrade.cost = Math.floor(upgrade.cost * 1.5);
+                    break;
             }
             return true;
         }
@@ -980,46 +1598,46 @@ class GoblinShop {
         // Cabeza
         ctx.fillStyle = '#4a7c1a';
         ctx.beginPath();
-        ctx.ellipse(0, -this.height/2 - 10, 16, 13, 0, 0, Math.PI * 2);
+        ctx.ellipse(0, -this.height/2 - 5, 8, 6, 0, 0, Math.PI * 2);
         ctx.fill();
         
         // Ojos
         ctx.fillStyle = '#ff0000';
         ctx.beginPath();
-        ctx.arc(-5, -this.height/2 - 10, 2, 0, Math.PI * 2);
-        ctx.arc(5, -this.height/2 - 10, 2, 0, Math.PI * 2);
+        ctx.arc(-2, -this.height/2 - 5, 1, 0, Math.PI * 2);
+        ctx.arc(2, -this.height/2 - 5, 1, 0, Math.PI * 2);
         ctx.fill();
         
         // Orejas puntiagudas
         ctx.fillStyle = '#4a7c1a';
         ctx.beginPath();
-        ctx.moveTo(-13, -this.height/2 - 13);
-        ctx.lineTo(-18, -this.height/2 - 23);
-        ctx.lineTo(-10, -this.height/2 - 16);
+        ctx.moveTo(-6, -this.height/2 - 6);
+        ctx.lineTo(-8, -this.height/2 - 11);
+        ctx.lineTo(-5, -this.height/2 - 8);
         ctx.closePath();
         ctx.fill();
         
         ctx.beginPath();
-        ctx.moveTo(13, -this.height/2 - 13);
-        ctx.lineTo(18, -this.height/2 - 23);
-        ctx.lineTo(10, -this.height/2 - 16);
+        ctx.moveTo(6, -this.height/2 - 6);
+        ctx.lineTo(8, -this.height/2 - 11);
+        ctx.lineTo(5, -this.height/2 - 8);
         ctx.closePath();
         ctx.fill();
         
         // Sombrero de comerciante
         ctx.fillStyle = '#8B4513';
         ctx.beginPath();
-        ctx.ellipse(0, -this.height/2 - 23, 20, 5, 0, 0, Math.PI * 2);
+        ctx.ellipse(0, -this.height/2 - 11, 10, 3, 0, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillRect(-10, -this.height/2 - 33, 20, 10);
+        ctx.fillRect(-5, -this.height/2 - 16, 10, 5);
         
         // Letrero
         ctx.fillStyle = 'rgba(139, 69, 19, 0.9)';
-        ctx.fillRect(-25, this.height/2 + 3, 50, 18);
+        ctx.fillRect(-20, this.height/2 + 2, 40, 10);
         ctx.fillStyle = '#FFD700';
-        ctx.font = 'bold 10px Arial';
+        ctx.font = 'bold 7px Arial';
         ctx.textAlign = 'center';
-        ctx.fillText('TIENDA GOBLIN', 0, this.height/2 + 15);
+        ctx.fillText('TIENDA', 0, this.height/2 + 9);
         
         ctx.restore();
     }
@@ -1112,29 +1730,39 @@ class GoblinShop {
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
-const terrain = new VoxelTerrain(canvas.width, canvas.height, 4);
+let terrain = new VoxelTerrain(canvas.width, canvas.height, 6); // Voxels más grandes
 
 // Calcular posición de spawn en la superficie después de que el terreno esté generado
 function findSurfacePosition(terrain, x) {
-    const noiseHeight = Math.sin((x / terrain.voxelSize) * 0.1) * 5 + Math.sin((x / terrain.voxelSize) * 0.05) * 10;
+    const gridX = Math.floor(x / terrain.voxelSize);
+    const noiseHeight = Math.sin(gridX * 0.02) * 3 + Math.sin(gridX * 0.008) * 6;
     const surfaceY = (terrain.surfaceHeight + noiseHeight) * terrain.voxelSize;
     return surfaceY - 50; // Spawner bien arriba de la superficie
 }
 
 const spawnX = canvas.width / 2;
 const spawnY = findSurfacePosition(terrain, spawnX);
-const player = new Player(spawnX, spawnY);
+let player = new Player(spawnX, spawnY);
 
 // Crear goblin en la superficie
-const goblinX = spawnX + 100;
+const goblinX = spawnX + 40;
 const goblinY = findSurfacePosition(terrain, goblinX);
-const goblinShop = new GoblinShop(goblinX, goblinY);
+let goblinShop = new GoblinShop(goblinX, goblinY);
+
+// Crear mercader en la superficie (al otro lado)
+const merchantX = spawnX - 40;
+const merchantY = findSurfacePosition(terrain, merchantX);
+let merchant = new Merchant(merchantX, merchantY);
+
 
 const particleSystem = new ParticleSystem();
 const dynamites = []; // Array para almacenar las dinamitas
 
 const keys = {};
+let cameraX = 0;
 let cameraY = 0;
+let gameStarted = true;
+let restartButton = null;
 
 document.addEventListener('keydown', (e) => {
     // Prevenir que las flechas muevan la ventana del navegador
@@ -1142,14 +1770,17 @@ document.addEventListener('keydown', (e) => {
         e.preventDefault();
     }
     
+    // Solo procesar teclas si el juego está activo
+    if (!gameStarted || player.isDead) return;
+    
     keys[e.key] = true;
     
-    // Manejar interacciones de la tienda
+    // Manejar interacciones de las tiendas
     if (goblinShop.showShop) {
-        const upgradeKeys = ['refuel', 'fuelTank', 'jumpBoots', 'miningSpeed'];
+        const upgradeKeys = ['refuel', 'fuelTank', 'jumpBoots', 'miningSpeed', 'backpack', 'dynamite', 'explosionRadius'];
         const numKey = parseInt(e.key);
         
-        if (numKey >= 1 && numKey <= 4) {
+        if (numKey >= 1 && numKey <= 7) {
             const upgradeKey = upgradeKeys[numKey - 1];
             goblinShop.buyUpgrade(player, upgradeKey);
         }
@@ -1157,11 +1788,29 @@ document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             goblinShop.showShop = false;
         }
+    } else if (merchant.showShop) {
+        if (e.key === 'v' || e.key === 'V') {
+            const totalEarned = merchant.sellAllResources(player);
+            if (totalEarned > 0) {
+                console.log(`¡Vendiste recursos por ${totalEarned} de dinero!`);
+            }
+        }
+        
+        if (e.key === 'Escape') {
+            merchant.showShop = false;
+        }
     } else {
         // Abrir tienda si está cerca del goblin
         if (e.key === 'e' || e.key === 'E') {
             if (goblinShop.isNearPlayer(player)) {
                 goblinShop.showShop = true;
+            }
+        }
+        
+        // Abrir mercader si está cerca
+        if (e.key === 'r' || e.key === 'R') {
+            if (merchant.isNearPlayer(player)) {
+                merchant.showShop = true;
             }
         }
     }
@@ -1171,14 +1820,97 @@ document.addEventListener('keyup', (e) => {
     keys[e.key] = false;
 });
 
+// Función para respawnear después de morir
+function respawnPlayer() {
+    // Guardar la mitad del dinero, dinamitas y todas las mejoras
+    const halfMoney = Math.floor(player.money / 2);
+    const dynamiteCount = player.dynamiteCount;
+    const explosionRadiusLevel = player.explosionRadiusLevel;
+    const maxFuel = player.maxFuel;
+    const jumpPower = player.jumpPower;
+    const miningSpeedLevel = player.miningSpeedLevel;
+    const maxInventoryTotal = player.maxInventoryTotal;
+    const backpackLevel = player.backpackLevel;
+    
+    // Calcular posición de spawn en la superficie
+    const newSpawnY = findSurfacePosition(terrain, spawnX);
+    
+    // Crear nuevo jugador
+    player = new Player(spawnX, newSpawnY);
+    
+    // Restaurar la mitad del dinero, dinamitas y todas las mejoras
+    player.money = halfMoney;
+    player.dynamiteCount = dynamiteCount;
+    player.explosionRadiusLevel = explosionRadiusLevel;
+    player.maxFuel = maxFuel;
+    player.fuel = maxFuel; // Respawnear con el tanque lleno
+    player.jumpPower = jumpPower;
+    player.miningSpeedLevel = miningSpeedLevel;
+    player.maxInventoryTotal = maxInventoryTotal;
+    player.backpackLevel = backpackLevel;
+    
+    // Limpiar sistemas pero no regenerar terreno
+    particleSystem.particles = [];
+    
+    // Resetear cámara a la superficie
+    cameraX = 0;
+    cameraY = 0;
+    
+    // Limpiar teclas
+    for (let key in keys) {
+        keys[key] = false;
+    }
+}
+
+// Función para reiniciar el juego completo
+function restartGame() {
+    // Reiniciar terreno
+    terrain = new VoxelTerrain(canvas.width, canvas.height, 6);
+    
+    // Recalcular posición de spawn después de regenerar el terreno
+    const newSpawnY = findSurfacePosition(terrain, spawnX);
+    
+    // Reiniciar jugador
+    player = new Player(spawnX, newSpawnY);
+    
+    // Recrear goblin y mercader con las nuevas posiciones del terreno
+    const newGoblinY = findSurfacePosition(terrain, goblinX);
+    goblinShop = new GoblinShop(goblinX, newGoblinY);
+    
+    const newMerchantY = findSurfacePosition(terrain, merchantX);
+    merchant = new Merchant(merchantX, newMerchantY);
+    
+    // Reiniciar sistemas
+    particleSystem.particles = [];
+    dynamites.length = 0;
+    
+    // Reiniciar cámara
+    cameraX = 0;
+    cameraY = 0;
+    
+    // Reiniciar estado del juego
+    gameStarted = true;
+    
+    // Limpiar teclas
+    for (let key in keys) {
+        keys[key] = false;
+    }
+}
+
+
 function gameLoop() {
     // Actualizar cámara para seguir al jugador en ambas direcciones
+    const targetCameraX = player.x - canvas.width / 2;
     const targetCameraY = player.y - canvas.height / 2;
-    const cameraDiff = targetCameraY - cameraY;
+    const cameraDiffX = targetCameraX - cameraX;
+    const cameraDiffY = targetCameraY - cameraY;
     
     // Suavizar el movimiento de cámara en ambas direcciones
-    if (Math.abs(cameraDiff) > 1) {
-        cameraY += cameraDiff * 0.1;
+    if (Math.abs(cameraDiffX) > 1) {
+        cameraX += cameraDiffX * 0.1;
+    }
+    if (Math.abs(cameraDiffY) > 1) {
+        cameraY += cameraDiffY * 0.1;
     }
     
     // Limitar la cámara para no mostrar más allá del cielo
@@ -1186,6 +1918,12 @@ function gameLoop() {
     
     // Generar más terreno si es necesario
     terrain.checkAndGenerateDepth(cameraY);
+    terrain.checkAndGenerateWidth(cameraX);
+    
+    // Aplicar físicas de voxels cada pocos frames para optimización
+    if (Math.random() < 0.1) { // 10% de probabilidad por frame (aproximadamente cada 10 frames)
+        terrain.applyVoxelPhysics(cameraX, cameraY);
+    }
     
     // Limpiar canvas
     ctx.fillStyle = '#87CEEB';
@@ -1193,24 +1931,65 @@ function gameLoop() {
     
     // Aplicar transformación de cámara
     ctx.save();
-    ctx.translate(0, -cameraY);
+    ctx.translate(-cameraX, -cameraY);
     
-    terrain.draw(ctx, cameraY);
+    terrain.draw(ctx, cameraX, cameraY);
     
     player.update(terrain, keys);
+    
+    // Crear partículas del jetpack
+    if (player.jetpackActive) {
+        // Crear partículas de llama
+        if (Math.random() < 0.8) {
+            const particle = new Particle(player.x, player.y + player.height/2, '#FF4500');
+            particle.vx = (Math.random() - 0.5) * 4;
+            particle.vy = Math.random() * 5 + 3;
+            particle.size = Math.random() * 4 + 2;
+            particle.life = 20 + Math.random() * 15;
+            particle.maxLife = particle.life;
+            particle.gravity = 0.05;
+            particleSystem.particles.push(particle);
+        }
+        
+        // Añadir MUCHO más humo
+        if (Math.random() < 0.7) {
+            const particle = new Particle(player.x, player.y + player.height/2, '#666666');
+            particle.vx = (Math.random() - 0.5) * 3;
+            particle.vy = Math.random() * 4 + 2;
+            particle.size = Math.random() * 6 + 3; // Humo más grande
+            particle.life = 40 + Math.random() * 30; // Humo más duradero
+            particle.maxLife = particle.life;
+            particle.gravity = -0.02; // Humo sube ligeramente
+            particleSystem.particles.push(particle);
+        }
+        
+        // Partículas azules ocasionales
+        if (Math.random() < 0.2) {
+            const particle = new Particle(player.x, player.y + player.height/2, '#00BFFF');
+            particle.vx = (Math.random() - 0.5) * 2;
+            particle.vy = Math.random() * 4 + 2;
+            particle.size = Math.random() * 2 + 1;
+            particle.life = 10 + Math.random() * 8;
+            particle.maxLife = particle.life;
+            particle.gravity = 0.02;
+            particleSystem.particles.push(particle);
+        }
+    }
+    
     player.draw(ctx);
     
     goblinShop.draw(ctx);
+    merchant.draw(ctx);
     
     // Actualizar y dibujar dinamitas
     for (let i = dynamites.length - 1; i >= 0; i--) {
         const dynamite = dynamites[i];
         const wasExploded = dynamite.exploded;
         
-        dynamite.update(terrain);
+        dynamite.update(terrain, dynamites);
         
         // Si la dinamita acaba de explotar (cambió de no explotada a explotada)
-        if (!wasExploded && dynamite.exploded && !player.isDead) {
+        if (!wasExploded && dynamite.exploded) {
             console.log("¡Dinamita explotó! Verificando distancia...");
             const distance = Math.sqrt(
                 Math.pow(dynamite.x - player.x, 2) + 
@@ -1220,7 +1999,24 @@ function gameLoop() {
             console.log(`Posición dinamita: (${dynamite.x}, ${dynamite.y})`);
             console.log(`Posición jugador: (${player.x}, ${player.y})`);
             
-            if (distance <= dynamite.explosionRadius) {
+            // Dar recursos al jugador SIEMPRE que la dinamita recolecte algo
+            if (dynamite.resourcesCollected) {
+                Object.keys(dynamite.resourcesCollected).forEach(resource => {
+                    const amount = dynamite.resourcesCollected[resource];
+                    for (let i = 0; i < amount; i++) {
+                        if (player.canAddToInventory()) {
+                            player.inventory[resource]++;
+                            console.log(`¡Dinamita recolectó 1 ${resource}!`);
+                        } else {
+                            console.log(`¡Mochila llena! No se puede recoger más ${resource}`);
+                            break;
+                        }
+                    }
+                });
+            }
+            
+            // Verificar si mata al jugador
+            if (distance <= dynamite.explosionRadius && !player.isDead) {
                 console.log("¡JUGADOR MUERTO POR DINAMITA!");
                 // Forzar muerte inmediata por dinamita
                 player.isDead = true;
@@ -1237,11 +2033,6 @@ function gameLoop() {
                     particle.life = 60 + Math.random() * 40;
                     particle.maxLife = particle.life;
                     particleSystem.particles.push(particle);
-                }
-                
-                // Dar oro al jugador si la dinamita recolectó algo
-                if (dynamite.goldToGive && dynamite.goldToGive > 0) {
-                    player.money += dynamite.goldToGive;
                 }
             }
         }
@@ -1289,8 +2080,24 @@ function gameLoop() {
     ctx.font = 'bold 18px Arial';
     ctx.fillText(`💣 ${player.dynamiteCount}`, 20, 110);
     
-    // Profundidad
-    const depth = Math.floor((player.y - 320) / 4);
+    // Inventario
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(10, 130, 200, 120);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = 'bold 14px Arial';
+    const totalItems = player.getTotalInventoryCount();
+    ctx.fillText(`🎒 MOCHILA (${totalItems}/${player.maxInventoryTotal}):`, 20, 150);
+    
+    ctx.font = '12px Arial';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(`⚫ Carbón: ${player.inventory.coal}`, 20, 170);
+    ctx.fillText(`⚪ Plata: ${player.inventory.silver}`, 20, 190);
+    ctx.fillText(`🟡 Oro: ${player.inventory.gold}`, 20, 210);
+    ctx.fillText(`💎 Diamante: ${player.inventory.diamond}`, 20, 230);
+    
+    // Profundidad - calcular basándonos en la superficie del terreno
+    const surfaceY = terrain.surfaceHeight * terrain.voxelSize;
+    const depth = Math.floor((player.y - surfaceY) / terrain.voxelSize);
     if (depth > 0) {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
         ctx.fillRect(canvas.width - 160, 10, 150, 30);
@@ -1300,8 +2107,8 @@ function gameLoop() {
         ctx.fillText('Profundidad: ' + depth + 'm', canvas.width - 150, 30);
     }
     
-    // Indicador de tienda cerca
-    if (goblinShop.isNearPlayer(player) && !goblinShop.showShop) {
+    // Indicadores de tiendas cerca
+    if (goblinShop.isNearPlayer(player) && !goblinShop.showShop && !merchant.showShop) {
         ctx.fillStyle = 'rgba(255, 215, 0, 0.8)';
         ctx.fillRect(canvas.width/2 - 100, 50, 200, 30);
         ctx.fillStyle = '#000';
@@ -1310,11 +2117,26 @@ function gameLoop() {
         ctx.fillText('Presiona E para abrir tienda', canvas.width/2, 70);
     }
     
-    // UI de la tienda
-    goblinShop.drawShopUI(ctx, player);
+    if (merchant.isNearPlayer(player) && !merchant.showShop && !goblinShop.showShop) {
+        ctx.fillStyle = 'rgba(0, 255, 100, 0.8)';
+        ctx.fillRect(canvas.width/2 - 120, 90, 240, 30);
+        ctx.fillStyle = '#000';
+        ctx.font = 'bold 16px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Presiona R para vender recursos', canvas.width/2, 110);
+    }
     
-    // Pantalla de Game Over
-    if (player.isDead && player.deathTimer > 60) {
+    // UI de las tiendas
+    goblinShop.drawShopUI(ctx, player);
+    merchant.drawShopUI(ctx, player);
+    
+    // Auto-respawn después de 2 segundos
+    if (player.isDead && player.deathTimer > 120) {
+        respawnPlayer();
+    }
+    
+    // Mostrar mensaje de muerte durante 2 segundos
+    if (player.isDead && player.deathTimer <= 120) {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
@@ -1335,7 +2157,8 @@ function gameLoop() {
         }
         
         ctx.font = '18px Arial';
-        ctx.fillText('Recarga la página para volver a jugar', canvas.width/2, canvas.height/2 + 80);
+        ctx.fillStyle = '#FFD700';
+        ctx.fillText('Respawneando en ' + Math.ceil((120 - player.deathTimer) / 60) + '...', canvas.width/2, canvas.height/2 + 80);
     }
     
     requestAnimationFrame(gameLoop);
