@@ -422,19 +422,23 @@ class VoxelTerrain {
         }
     }
     
-    // Sistema de físicas para voxels flotantes
+    // Sistema de físicas para voxels flotantes (optimizado)
     applyVoxelPhysics(cameraX, cameraY) {
-        // Solo procesar área visible para optimización
+        // Solo procesar área muy pequeña alrededor del jugador
         const startY = Math.floor(cameraY / this.voxelSize);
         const endY = Math.ceil((cameraY + this.height) / this.voxelSize);
-        const startX = Math.floor(cameraX / this.voxelSize) - 10;
-        const endX = Math.ceil((cameraX + this.width) / this.voxelSize) + 10;
+        const startX = Math.floor(cameraX / this.voxelSize) - 5;
+        const endX = Math.ceil((cameraX + this.width) / this.voxelSize) + 5;
         
         const fallingVoxels = [];
         
         // Buscar voxels flotantes (de abajo hacia arriba para evitar cascadas)
-        for (let y = endY; y >= startY; y--) {
-            for (let x = startX; x <= endX; x++) {
+        // Aumentar límite para procesar más bloques flotantes
+        let processedCount = 0;
+        const maxProcessPerFrame = 15;
+        
+        for (let y = endY; y >= startY && processedCount < maxProcessPerFrame; y--) {
+            for (let x = startX; x <= endX && processedCount < maxProcessPerFrame; x++) {
                 if (!this.voxels[x] || !this.voxels[x][y]) continue;
                 
                 const voxel = this.voxels[x][y];
@@ -453,6 +457,7 @@ class VoxelTerrain {
                             targetY: fallY,
                             voxel: { ...voxel }
                         });
+                        processedCount++;
                     }
                 }
             }
@@ -488,26 +493,48 @@ class VoxelTerrain {
         return fallingVoxels.length; // Retornar número de bloques que cayeron
     }
     
-    // Verificar si un voxel tiene soporte (está conectado a otros voxels)
+    // Verificar si un voxel tiene soporte (directo o a través de cadena horizontal)
     hasSupport(x, y) {
-        // Verificar todas las direcciones adyacentes (incluye diagonales)
-        const adjacentPositions = [
-            { dx: -1, dy: -1 }, { dx: 0, dy: -1 }, { dx: 1, dy: -1 }, // Arriba
-            { dx: -1, dy: 0 },                     { dx: 1, dy: 0 },  // Lados
-            { dx: -1, dy: 1 },  { dx: 0, dy: 1 },  { dx: 1, dy: 1 }   // Abajo
-        ];
+        // Primero verificar soporte directo
+        if (this.voxels[x] && this.voxels[x][y + 1]) {
+            return true;
+        }
         
-        // Si tiene al menos un voxel conectado en cualquier dirección, no debe caer
-        for (const pos of adjacentPositions) {
-            const adjX = x + pos.dx;
-            const adjY = y + pos.dy;
+        // Verificar si hay cadena horizontal hacia bloques con soporte
+        // Buscar en ambas direcciones hasta 20 bloques
+        const maxDistance = 20;
+        
+        // Verificar hacia la derecha
+        for (let dx = 1; dx <= maxDistance; dx++) {
+            const checkX = x + dx;
             
-            if (this.voxels[adjX] && this.voxels[adjX][adjY]) {
-                return true; // Tiene al menos una conexión, no debe caer
+            // Si no hay bloque en esta posición horizontal, romper la cadena
+            if (!this.voxels[checkX] || !this.voxels[checkX][y]) {
+                break;
+            }
+            
+            // Si este bloque tiene soporte directo, toda la cadena tiene soporte
+            if (this.voxels[checkX] && this.voxels[checkX][y + 1]) {
+                return true;
             }
         }
         
-        return false; // Completamente aislado, debe caer
+        // Verificar hacia la izquierda
+        for (let dx = 1; dx <= maxDistance; dx++) {
+            const checkX = x - dx;
+            
+            // Si no hay bloque en esta posición horizontal, romper la cadena
+            if (!this.voxels[checkX] || !this.voxels[checkX][y]) {
+                break;
+            }
+            
+            // Si este bloque tiene soporte directo, toda la cadena tiene soporte
+            if (this.voxels[checkX] && this.voxels[checkX][y + 1]) {
+                return true;
+            }
+        }
+        
+        return false; // No hay soporte directo ni a través de cadena horizontal
     }
     
     // Encontrar la posición donde debe caer un voxel
@@ -557,13 +584,13 @@ class Player {
         this.deathCause = 'fuel'; // 'fuel' o 'dynamite'
         
         // Dinamita
-        this.dynamiteCount = 5; // Número inicial de dinamitas
+        this.dynamiteCount = 10; // Número inicial de dinamitas
         this.dynamiteCooldown = 0;
         this.explosionRadiusLevel = 1; // Nivel de radio de explosión
         
         // Jetpack
         this.jetpackActive = false;
-        this.jetpackPower = 0.4; // Fuerza del jetpack (más lento)
+        this.jetpackPower = 2.4; // Fuerza del jetpack (más lento)
         this.jetpackFuelConsumption = 0.4; // Combustible por frame (balanceado)
         this.jetpackEfficiencyLevel = 1; // Nivel de eficiencia
         this.jetpackPowerLevel = 1; // Nivel de potencia
@@ -1051,7 +1078,7 @@ class Dynamite {
         this.vx = 0; // Velocidad horizontal
         this.vy = 0; // Velocidad vertical
         this.onGround = false;
-        this.explosionRadius = 80 + (explosionRadiusLevel - 1) * 20; // Radio de explosión aumenta con nivel
+        this.explosionRadius = 120 + (explosionRadiusLevel - 1) * 30; // Radio de explosión mucho mayor
         this.hasExploded = false; // Flag para asegurar que solo explote una vez
     }
     
@@ -1093,8 +1120,8 @@ class Dynamite {
             }
         }
         
-        // Explotar cuando se acabe el tiempo
-        if (this.fuseTime <= 0 && !this.hasExploded) {
+        // Explotar cuando se acabe el tiempo Y esté en el suelo
+        if (this.fuseTime <= 0 && !this.hasExploded && this.onGround) {
             this.explode(terrain, allDynamites);
             this.hasExploded = true;
         }
@@ -1118,16 +1145,12 @@ class Dynamite {
                 const angle = Math.atan2(otherDynamite.y - this.y, otherDynamite.x - this.x);
                 
                 // Aplicar impulso basado en la fuerza de la explosión
-                const impulseStrength = 25 * force; // Fuerza del impulso aumentada
+                const impulseStrength = 40 * force; // Fuerza del impulso mucho mayor
                 otherDynamite.vx += Math.cos(angle) * impulseStrength;
                 otherDynamite.vy += Math.sin(angle) * impulseStrength;
                 
                 // Hacer que se despegue del suelo para que pueda volar
                 otherDynamite.onGround = false;
-                
-                // Reducir tiempo de mecha por la sacudida (reacción en cadena)
-                const shockReduction = Math.floor(30 * force); // Hasta 30 frames menos
-                otherDynamite.fuseTime = Math.max(10, otherDynamite.fuseTime - shockReduction);
             }
         });
         
@@ -1497,7 +1520,26 @@ class Merchant {
         // Instrucciones
         ctx.fillStyle = '#CCCCCC';
         ctx.font = '14px Arial';
-        ctx.fillText('Presiona V para vender todo | ESC para cerrar', 400, 520);
+        ctx.fillText('Presiona V para vender todo | Click en VENDER TODO | ESC para cerrar', 400, 520);
+    }
+    
+    handleMouseClick(mouseX, mouseY, player) {
+        if (!this.showShop) return;
+        
+        const totalValue = Object.keys(player.inventory).reduce((total, resource) => {
+            const amount = player.inventory[resource];
+            const value = amount * (this.prices[resource] || 0);
+            return total + value;
+        }, 0);
+        
+        if (totalValue > 0) {
+            const yPos = 190 + Object.keys(player.inventory).length * 30 + 50;
+            
+            // Verificar si el click está dentro del botón "VENDER TODO"
+            if (mouseX >= 300 && mouseX <= 500 && mouseY >= yPos + 20 && mouseY <= yPos + 70) {
+                this.sellAllResources(player);
+            }
+        }
     }
 }
 
@@ -1723,14 +1765,38 @@ class GoblinShop {
         ctx.fillStyle = '#CCCCCC';
         ctx.font = '14px Arial';
         ctx.textAlign = 'center';
-        ctx.fillText('Presiona los números 1-4 para comprar | ESC para cerrar', 400, 520);
+        ctx.fillText('Presiona los números 1-4 para comprar | Click en los botones | ESC para cerrar', 400, 520);
+    }
+    
+    handleMouseClick(mouseX, mouseY, player) {
+        if (!this.showShop) return;
+        
+        const upgrades = Object.entries(this.upgrades);
+        
+        for (let i = 0; i < upgrades.length; i++) {
+            const [key, upgrade] = upgrades[i];
+            const x = 70 + (i % 2) * 320;
+            const y = 160 + Math.floor(i / 2) * 80;
+            
+            // Verificar si el click está dentro del botón de mejora
+            if (mouseX >= x && mouseX <= x + 280 && mouseY >= y && mouseY <= y + 70) {
+                // Solo comprar si no está al máximo y no es tanque lleno
+                const maxed = upgrade.level >= upgrade.maxLevel;
+                const fuelFull = key === 'refuel' && player.fuel >= player.maxFuel;
+                
+                if (!maxed && !fuelFull) {
+                    this.buyUpgrade(player, key);
+                }
+                break;
+            }
+        }
     }
 }
 
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
-let terrain = new VoxelTerrain(canvas.width, canvas.height, 6); // Voxels más grandes
+let terrain = new VoxelTerrain(canvas.width, canvas.height, 8); // Voxels aún más grandes
 
 // Calcular posición de spawn en la superficie después de que el terreno esté generado
 function findSurfacePosition(terrain, x) {
@@ -1820,6 +1886,30 @@ document.addEventListener('keyup', (e) => {
     keys[e.key] = false;
 });
 
+// Variables para mouse
+let mouseX = 0;
+let mouseY = 0;
+
+// Event listeners del mouse
+canvas.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    mouseX = e.clientX - rect.left;
+    mouseY = e.clientY - rect.top;
+});
+
+canvas.addEventListener('click', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    mouseX = e.clientX - rect.left;
+    mouseY = e.clientY - rect.top;
+    
+    // Manejar clicks en las tiendas
+    if (goblinShop.showShop) {
+        goblinShop.handleMouseClick(mouseX, mouseY, player);
+    } else if (merchant.showShop) {
+        merchant.handleMouseClick(mouseX, mouseY, player);
+    }
+});
+
 // Función para respawnear después de morir
 function respawnPlayer() {
     // Guardar la mitad del dinero, dinamitas y todas las mejoras
@@ -1865,7 +1955,7 @@ function respawnPlayer() {
 // Función para reiniciar el juego completo
 function restartGame() {
     // Reiniciar terreno
-    terrain = new VoxelTerrain(canvas.width, canvas.height, 6);
+    terrain = new VoxelTerrain(canvas.width, canvas.height, 8);
     
     // Recalcular posición de spawn después de regenerar el terreno
     const newSpawnY = findSurfacePosition(terrain, spawnX);
@@ -1920,7 +2010,7 @@ function gameLoop() {
     terrain.checkAndGenerateDepth(cameraY);
     terrain.checkAndGenerateWidth(cameraX);
     
-    // Aplicar físicas de voxels cada pocos frames para optimización
+    // Aplicar físicas de voxels más frecuentemente para bloques flotantes
     if (Math.random() < 0.1) { // 10% de probabilidad por frame (aproximadamente cada 10 frames)
         terrain.applyVoxelPhysics(cameraX, cameraY);
     }
@@ -2080,20 +2170,89 @@ function gameLoop() {
     ctx.font = 'bold 18px Arial';
     ctx.fillText(`💣 ${player.dynamiteCount}`, 20, 110);
     
-    // Inventario
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    ctx.fillRect(10, 130, 200, 120);
-    ctx.fillStyle = '#FFFFFF';
-    ctx.font = 'bold 14px Arial';
+    // Barra de progreso de mochila (lado derecho)
+    const bagX = canvas.width - 60;
+    const bagY = 100;
+    const bagWidth = 40;
+    const bagHeight = 300;
     const totalItems = player.getTotalInventoryCount();
-    ctx.fillText(`🎒 MOCHILA (${totalItems}/${player.maxInventoryTotal}):`, 20, 150);
     
-    ctx.font = '12px Arial';
+    // Fondo de la barra (blanco para espacios vacíos)
     ctx.fillStyle = '#FFFFFF';
-    ctx.fillText(`⚫ Carbón: ${player.inventory.coal}`, 20, 170);
-    ctx.fillText(`⚪ Plata: ${player.inventory.silver}`, 20, 190);
-    ctx.fillText(`🟡 Oro: ${player.inventory.gold}`, 20, 210);
-    ctx.fillText(`💎 Diamante: ${player.inventory.diamond}`, 20, 230);
+    ctx.fillRect(bagX, bagY, bagWidth, bagHeight);
+    
+    // Borde
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bagX, bagY, bagWidth, bagHeight);
+    
+    // Calcular altura por item individual
+    const itemHeight = bagHeight / player.maxInventoryTotal;
+    let currentY = bagY + bagHeight;
+    
+    // Dibujar items individuales (de abajo hacia arriba como una pila)
+    // Primero carbón
+    for (let i = 0; i < player.inventory.coal; i++) {
+        ctx.fillStyle = '#1a1a1a'; // Carbón
+        ctx.fillRect(bagX + 2, currentY - itemHeight, bagWidth - 4, itemHeight - 1);
+        currentY -= itemHeight;
+    }
+    
+    // Luego plata
+    for (let i = 0; i < player.inventory.silver; i++) {
+        ctx.fillStyle = '#C0C0C0'; // Plata
+        ctx.fillRect(bagX + 2, currentY - itemHeight, bagWidth - 4, itemHeight - 1);
+        currentY -= itemHeight;
+    }
+    
+    // Luego oro
+    for (let i = 0; i < player.inventory.gold; i++) {
+        ctx.fillStyle = '#FFD700'; // Oro
+        ctx.fillRect(bagX + 2, currentY - itemHeight, bagWidth - 4, itemHeight - 1);
+        currentY -= itemHeight;
+    }
+    
+    // Finalmente diamante
+    for (let i = 0; i < player.inventory.diamond; i++) {
+        ctx.fillStyle = '#B9F2FF'; // Diamante
+        ctx.fillRect(bagX + 2, currentY - itemHeight, bagWidth - 4, itemHeight - 1);
+        currentY -= itemHeight;
+    }
+    
+    // Texto de capacidad
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = 'bold 12px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('🎒', bagX + bagWidth/2, bagY - 10);
+    ctx.font = '10px Arial';
+    ctx.fillText(`${totalItems}/${player.maxInventoryTotal}`, bagX + bagWidth/2, bagY + bagHeight + 15);
+    
+    // Indicadores de cantidad simplificados
+    if (totalItems > 0) {
+        ctx.textAlign = 'left';
+        ctx.font = '10px Arial';
+        ctx.fillStyle = '#FFFFFF';
+        let labelY = bagY + bagHeight + 30;
+        
+        if (player.inventory.coal > 0) {
+            ctx.fillText(`⚫${player.inventory.coal}`, bagX - 25, labelY);
+            labelY += 12;
+        }
+        
+        if (player.inventory.silver > 0) {
+            ctx.fillText(`⚪${player.inventory.silver}`, bagX - 25, labelY);
+            labelY += 12;
+        }
+        
+        if (player.inventory.gold > 0) {
+            ctx.fillText(`🟡${player.inventory.gold}`, bagX - 25, labelY);
+            labelY += 12;
+        }
+        
+        if (player.inventory.diamond > 0) {
+            ctx.fillText(`💎${player.inventory.diamond}`, bagX - 25, labelY);
+        }
+    }
     
     // Profundidad - calcular basándonos en la superficie del terreno
     const surfaceY = terrain.surfaceHeight * terrain.voxelSize;
